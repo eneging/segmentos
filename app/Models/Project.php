@@ -30,6 +30,7 @@ class Project extends Model
         'cover_image_url',
         'client_access_token',
         'notes',
+        'drive_folder_id',
     ];
 
     protected function casts(): array
@@ -55,6 +56,11 @@ class Project extends Model
     public function tasks(): HasMany
     {
         return $this->hasMany(ProjectTask::class);
+    }
+
+    public function media(): HasMany
+    {
+        return $this->hasMany(ProjectMedia::class);
     }
 
     public function quotations(): HasMany

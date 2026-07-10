@@ -125,6 +125,51 @@ class SegmentosController extends Controller
         return response()->json($project->load(['client', 'responsible', 'tasks']));
     }
 
+    public function updateProjectNotes(Project $project, Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'notes' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $project->update($data);
+
+        return response()->json($project->load(['client', 'responsible', 'tasks']));
+    }
+
+    public function updateTaskStatus(ProjectTask $projectTask, Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'status' => ['required', 'in:Pendiente,En progreso,Terminada'],
+        ]);
+
+        $projectTask->update($data);
+
+        return response()->json($projectTask->load('project'));
+    }
+
+    public function storeTask(Project $project, Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+        ]);
+
+        $task = ProjectTask::create([
+            'project_id' => $project->id,
+            'worker_id' => $project->responsible_worker_id,
+            'title' => $data['title'],
+            'status' => 'Pendiente',
+        ]);
+
+        return response()->json($task, 201);
+    }
+
+    public function destroyTask(ProjectTask $projectTask): JsonResponse
+    {
+        $projectTask->delete();
+
+        return response()->json(status: 204);
+    }
+
     public function destroyProject(Project $project): JsonResponse
     {
         ActivityLog::create([
@@ -223,7 +268,9 @@ class SegmentosController extends Controller
 
     public function calendarEvents(): JsonResponse
     {
-        return response()->json(CalendarEvent::with('project.client')->latest('starts_at')->get());
+        return response()->json(
+            CalendarEvent::whereHas('project')->with('project.client')->latest('starts_at')->get()
+        );
     }
 
     public function myTasks(Request $request): JsonResponse
@@ -235,7 +282,7 @@ class SegmentosController extends Controller
         }
 
         return response()->json(
-            ProjectTask::with('project.client')->where('worker_id', $worker->id)->latest()->get()
+            ProjectTask::whereHas('project')->with('project.client')->where('worker_id', $worker->id)->latest()->get()
         );
     }
 

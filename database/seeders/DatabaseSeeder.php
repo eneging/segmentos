@@ -48,6 +48,7 @@ class DatabaseSeeder extends Seeder
         $administrator = Role::firstOrCreate(['name' => 'Administrador']);
         $workerRole = Role::firstOrCreate(['name' => 'Trabajador']);
         $clientRole = Role::firstOrCreate(['name' => 'Cliente']);
+        Role::firstOrCreate(['name' => 'Community Manager']);
 
         $administrator->syncPermissions($permissions);
         $workerRole->syncPermissions(['update assigned tasks', 'upload project images']);

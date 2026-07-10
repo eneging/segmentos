@@ -17,6 +17,7 @@ import {
   Globe,
   GripVertical,
   ImagePlus,
+  Images,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -35,6 +36,7 @@ import { useForm } from 'react-hook-form';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Chart } from 'chart.js/auto';
+import axios from 'axios';
 import { AuthProvider, useAuth } from './auth';
 import { WelcomeView } from './Welcome';
 import { QuotePortalView } from './Portal';
@@ -65,6 +67,7 @@ type Project = {
   name: string;
   type: string;
   description?: string | null;
+  notes?: string | null;
   complexity: string;
   priority: string;
   status: string;
@@ -75,7 +78,18 @@ type Project = {
   client_access_token: string;
   client: Client;
   responsible?: Worker;
-  tasks?: { id: number; status: string }[];
+  tasks?: { id: number; title: string; status: string }[];
+};
+
+type ProjectMedia = {
+  id: number;
+  type: 'image' | 'video';
+  drive_file_id: string;
+  drive_view_link: string;
+  drive_thumbnail_link: string | null;
+  caption: string | null;
+  created_at: string;
+  project?: { id: number; code: string; name: string };
 };
 
 type Dashboard = {
@@ -122,6 +136,13 @@ const isOverdue = (dateStr: string) => {
   in3Days.setDate(in3Days.getDate() + 3);
   return due < in3Days;
 };
+const confirmIncompleteTasks = (currentStatus: string, tasks: { status: string }[] | undefined, newStatus: string) => {
+  if (currentStatus !== 'Produccion' || newStatus !== 'Instalacion') return true;
+  const total = tasks?.length ?? 0;
+  const done = tasks?.filter((task) => task.status === 'Terminada').length ?? 0;
+  if (total === 0 || done >= total) return true;
+  return window.confirm(`Aun quedan ${total - done} tareas pendientes en este proyecto. ¿Moverlo a Instalacion igual?`);
+};
 
 const adminNav = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -137,14 +158,19 @@ const adminNav = [
 
 const workerNav = [{ key: 'my-tasks', label: 'Mis tareas', icon: ClipboardList }];
 const clientNav = [{ key: 'my-projects', label: 'Mis proyectos', icon: ClipboardList }];
+const cmNav = [{ key: 'media-library', label: 'Biblioteca', icon: Images }];
+
+const viewForRole = (isAdmin: boolean, isCliente: boolean, isCM: boolean) =>
+  isAdmin ? 'dashboard' : isCliente ? 'my-projects' : isCM ? 'media-library' : 'my-tasks';
 
 function App() {
   const { user, loading, logout } = useAuth();
   const navigate = useNavigate();
   const isAdmin = user?.roles.includes('Administrador') ?? false;
   const isCliente = user?.roles.includes('Cliente') ?? false;
-  const nav = isAdmin ? adminNav : isCliente ? clientNav : workerNav;
-  const [view, setView] = useState(isAdmin ? 'dashboard' : isCliente ? 'my-projects' : 'my-tasks');
+  const isCM = user?.roles.includes('Community Manager') ?? false;
+  const nav = isAdmin ? adminNav : isCliente ? clientNav : isCM ? cmNav : workerNav;
+  const [view, setView] = useState(viewForRole(isAdmin, isCliente, isCM));
   const [search, setSearch] = useState('');
   const [dark, setDark] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -154,12 +180,12 @@ function App() {
   }, [dark]);
 
   // El estado inicial de `view` se calcula en el primer render, cuando `user` todavia
-  // es null (la sesion recien se esta verificando) — en ese momento isAdmin/isCliente
+  // es null (la sesion recien se esta verificando) — en ese momento isAdmin/isCliente/isCM
   // siempre dan false, asi que `view` queda fijo en 'my-tasks' sin importar el rol real.
   // Este efecto corrige `view` apenas se resuelve el usuario logueado.
   useEffect(() => {
     if (user) {
-      setView(isAdmin ? 'dashboard' : isCliente ? 'my-projects' : 'my-tasks');
+      setView(viewForRole(isAdmin, isCliente, isCM));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
@@ -236,6 +262,7 @@ function App() {
         {view === 'site' && isAdmin && <SiteAdminView />}
         {view === 'my-tasks' && <MyTasksView />}
         {view === 'my-projects' && <ClientProjectsView />}
+        {view === 'media-library' && isCM && <MediaLibraryView />}
       </main>
     </div>
   );
@@ -293,6 +320,7 @@ function MyTasksView() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { data = [], isLoading } = useQuery({ queryKey: ['my-tasks'], queryFn: async () => (await api.get<MyTask[]>('/my-tasks')).data });
+  const [mediaProject, setMediaProject] = useState<{ id: number; name: string } | null>(null);
 
   const taskStatusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => api.patch(`/my-tasks/${id}/status`, { status }),
@@ -350,17 +378,21 @@ function MyTasksView() {
                     type="button"
                     className="kanban-move-button"
                     disabled={statusIndex >= statuses.length - 1}
-                    onClick={() =>
+                    onClick={() => {
+                      if (!confirmIncompleteTasks(project.status, tasks, statuses[statusIndex + 1])) return;
                       projectStatusMutation.mutate({
                         id: project.id,
                         status: statuses[statusIndex + 1],
                         progress: statusDefaultProgress[statuses[statusIndex + 1]] ?? 50,
-                      })
-                    }
+                      });
+                    }}
                   >
                     <ChevronRight size={16} />
                   </button>
                   <ProjectImageUpload projectId={project.id} invalidateKeys={[['my-tasks']]} />
+                  <button type="button" className="ghost-button" onClick={() => setMediaProject({ id: project.id, name: project.name })}>
+                    <Images size={14} /> Fotos/videos
+                  </button>
                 </div>
                 {project.status === 'Produccion' && (
                   <div className="card-actions" style={{ marginBottom: 14 }}>
@@ -421,6 +453,9 @@ function MyTasksView() {
         );
       })}
       {grouped.length === 0 && <section className="panel">No tienes tareas asignadas por el momento.</section>}
+      {mediaProject && (
+        <ProjectMediaModal projectId={mediaProject.id} projectName={mediaProject.name} onClose={() => setMediaProject(null)} />
+      )}
     </div>
   );
 }
@@ -764,6 +799,8 @@ function KanbanView({ search }: { search: string }) {
     const activeId = Number(event.active.id);
     const status = String(event.over?.id ?? '');
     if (!status) return;
+    const project = projects.find((item) => item.id === activeId);
+    if (!project || !confirmIncompleteTasks(project.status, project.tasks, status)) return;
     moveTo(activeId, status);
   };
 
@@ -771,6 +808,7 @@ function KanbanView({ search }: { search: string }) {
     const currentIndex = statuses.indexOf(project.status);
     const nextIndex = direction === 'prev' ? currentIndex - 1 : currentIndex + 1;
     if (nextIndex < 0 || nextIndex >= statuses.length) return;
+    if (!confirmIncompleteTasks(project.status, project.tasks, statuses[nextIndex])) return;
     moveTo(project.id, statuses[nextIndex]);
   };
 
@@ -834,6 +872,55 @@ function ClientsView() {
           ))}
         </tbody>
       </table>
+    </section>
+  );
+}
+
+function MediaLibraryView() {
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'image' | 'video'>('all');
+  const [lightboxItem, setLightboxItem] = useState<ProjectMedia | null>(null);
+  const { data = [], isLoading } = useQuery({
+    queryKey: ['content-library'],
+    queryFn: async () => (await api.get<ProjectMedia[]>('/content-library')).data,
+  });
+
+  const filtered = data.filter((item) => {
+    const matchesType = typeFilter === 'all' || item.type === typeFilter;
+    const haystack = `${item.project?.code ?? ''} ${item.project?.name ?? ''}`.toLowerCase();
+    return matchesType && haystack.includes(search.toLowerCase());
+  });
+
+  if (isLoading) return <Loading />;
+
+  return (
+    <section className="panel">
+      <div className="embed-row" style={{ marginBottom: 16 }}>
+        <input placeholder="Buscar por proyecto..." value={search} onChange={(event) => setSearch(event.target.value)} />
+        <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as 'all' | 'image' | 'video')}>
+          <option value="all">Todo</option>
+          <option value="image">Fotos</option>
+          <option value="video">Videos</option>
+        </select>
+      </div>
+
+      {filtered.length === 0 && <p>No hay contenido que coincida con la busqueda.</p>}
+
+      <div className="media-library-grid">
+        {filtered.map((item) => (
+          <article className="media-card" key={item.id}>
+            <button type="button" className="media-tile-open media-tile" onClick={() => setLightboxItem(item)}>
+              <MediaThumb item={item} />
+            </button>
+            <strong>{item.project ? `${item.project.code} - ${item.project.name}` : 'Proyecto'}</strong>
+            <span>{new Date(item.created_at).toLocaleDateString('es-PE')}</span>
+            <a className="ghost-button" href={item.drive_view_link} target="_blank" rel="noopener noreferrer">
+              Abrir en Drive
+            </a>
+          </article>
+        ))}
+      </div>
+      {lightboxItem && <MediaLightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />}
     </section>
   );
 }
@@ -972,6 +1059,7 @@ function UserFormModal({ user, onClose }: { user: AdminUser | null; onClose: () 
                 <option value="Administrador">Administrador</option>
                 <option value="Trabajador">Trabajador</option>
                 <option value="Cliente">Cliente</option>
+                <option value="Community Manager">Community Manager</option>
               </select>
             </label>
             <label>
@@ -1461,8 +1549,31 @@ type SiteSettingsPayload = {
   community_qr_url: string | null;
 };
 
+function GoogleIntegrationPanel() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['google-status'],
+    queryFn: async () => (await api.get<{ connected: boolean; email: string | null }>('/google/status')).data,
+  });
+
+  return (
+    <section className="panel">
+      <PanelTitle title="Google Drive" subtitle="Aqui se guardan las fotos y videos que suben del Kanban" />
+      {isLoading && <Loading />}
+      {!isLoading && data?.connected && (
+        <p>
+          Conectado como <strong>{data.email}</strong>.
+        </p>
+      )}
+      {!isLoading && !data?.connected && <p>Todavia no conectas tu cuenta de Google Drive.</p>}
+      <button type="button" className="primary-button" onClick={() => { window.location.href = '/api/v1/google/connect'; }}>
+        {data?.connected ? 'Reconectar' : 'Conectar Google Drive'}
+      </button>
+    </section>
+  );
+}
+
 function SiteAdminView() {
-  const [tab, setTab] = useState<'general' | 'services' | 'testimonials' | 'gallery'>('general');
+  const [tab, setTab] = useState<'general' | 'services' | 'testimonials' | 'gallery' | 'integrations'>('general');
 
   return (
     <>
@@ -1479,8 +1590,12 @@ function SiteAdminView() {
         <button className={tab === 'gallery' ? 'primary-button' : 'ghost-button'} onClick={() => setTab('gallery')}>
           Galeria
         </button>
+        <button className={tab === 'integrations' ? 'primary-button' : 'ghost-button'} onClick={() => setTab('integrations')}>
+          Integraciones
+        </button>
       </div>
       {tab === 'general' && <SiteGeneralForm />}
+      {tab === 'integrations' && <GoogleIntegrationPanel />}
       {tab === 'services' && (
         <SortableListEditor
           title="Servicios"
@@ -1808,6 +1923,8 @@ function DraggableProject({
   const style = {
     transform: CSS.Translate.toString(transform),
   };
+  const [checklistOpen, setChecklistOpen] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
   const currentIndex = statuses.indexOf(project.status);
   const tasksDone = project.tasks?.filter((task) => task.status === 'Terminada').length ?? 0;
   const tasksTotal = project.tasks?.length ?? 0;
@@ -1822,9 +1939,26 @@ function DraggableProject({
         <Badge label={project.priority} tone={project.priority === 'Urgente' ? 'danger' : 'normal'} />
         <Badge label={`${project.progress}%`} tone="normal" />
         {overdue && <Badge label="Atrasado" tone="danger" />}
-        {tasksTotal > 0 && (
-          <Badge label={`${tasksDone}/${tasksTotal} tareas`} tone={tasksDone === tasksTotal ? 'success' : 'normal'} />
-        )}
+        <button
+          type="button"
+          className="badge badge-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setChecklistOpen(true);
+          }}
+        >
+          {tasksTotal > 0 ? `${tasksDone}/${tasksTotal} tareas` : 'Tareas'}
+        </button>
+        <button
+          type="button"
+          className="badge badge-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setMediaOpen(true);
+          }}
+        >
+          <Images size={13} /> Fotos
+        </button>
       </div>
       {project.status === 'Produccion' && (
         <div className="card-actions">
@@ -1835,6 +1969,10 @@ function DraggableProject({
             +25%
           </button>
         </div>
+      )}
+      {checklistOpen && <ProjectChecklistModal project={project} onClose={() => setChecklistOpen(false)} />}
+      {mediaOpen && (
+        <ProjectMediaModal projectId={project.id} projectName={project.name} onClose={() => setMediaOpen(false)} />
       )}
       <div className="kanban-move">
         <button
@@ -1864,6 +2002,228 @@ function DraggableProject({
         </button>
       </div>
     </article>
+  );
+}
+
+function ProjectChecklistModal({ project, onClose }: { project: Project; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [notesDraft, setNotesDraft] = useState(project.notes ?? '');
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['projects'] });
+
+  const taskMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) => api.patch(`/tasks/${id}/status`, { status }),
+    onSuccess: invalidate,
+  });
+
+  const addTaskMutation = useMutation({
+    mutationFn: (title: string) => api.post(`/projects/${project.id}/tasks`, { title }),
+    onSuccess: () => {
+      invalidate();
+      setNewTaskTitle('');
+    },
+  });
+
+  const deleteTaskMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/tasks/${id}`),
+    onSuccess: invalidate,
+  });
+
+  const notesMutation = useMutation({
+    mutationFn: (notes: string) => api.patch(`/projects/${project.id}/notes`, { notes }),
+    onSuccess: invalidate,
+  });
+
+  return (
+    <Modal title={`Tareas — ${project.name}`} onClose={onClose}>
+      <div className="stack">
+        {(project.tasks ?? []).map((task) => (
+          <div className="kanban-task-row" key={task.id}>
+            <label>
+              <input
+                type="checkbox"
+                checked={task.status === 'Terminada'}
+                onChange={(event) =>
+                  taskMutation.mutate({ id: task.id, status: event.target.checked ? 'Terminada' : 'Pendiente' })
+                }
+              />
+              <span>{task.title}</span>
+            </label>
+            <button type="button" className="ghost-button" onClick={() => deleteTaskMutation.mutate(task.id)}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+        {(project.tasks ?? []).length === 0 && <span>Sin tareas todavia. Agrega la primera abajo.</span>}
+      </div>
+
+      <form
+        className="embed-row"
+        style={{ marginTop: 14 }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (newTaskTitle.trim()) addTaskMutation.mutate(newTaskTitle.trim());
+        }}
+      >
+        <input placeholder="Nueva tarea..." value={newTaskTitle} onChange={(event) => setNewTaskTitle(event.target.value)} />
+        <button className="ghost-button" type="submit" disabled={addTaskMutation.isPending}>
+          <Plus size={14} /> Agregar
+        </button>
+      </form>
+
+      <label style={{ display: 'block', marginTop: 18 }}>
+        Descripcion / notas de avance
+        <textarea
+          rows={3}
+          value={notesDraft}
+          onChange={(event) => setNotesDraft(event.target.value)}
+          onBlur={() => {
+            if (notesDraft !== (project.notes ?? '')) notesMutation.mutate(notesDraft);
+          }}
+        />
+      </label>
+    </Modal>
+  );
+}
+
+function MediaLightbox({ item, onClose }: { item: ProjectMedia; onClose: () => void }) {
+  return (
+    <Modal title={item.type === 'video' ? 'Video' : 'Foto'} onClose={onClose}>
+      <div className="media-lightbox">
+        {item.type === 'video' ? (
+          <iframe src={`https://drive.google.com/file/d/${item.drive_file_id}/preview`} allow="autoplay" allowFullScreen />
+        ) : (
+          <img src={`${item.drive_thumbnail_link}=w1600`} alt={item.caption ?? ''} />
+        )}
+      </div>
+      <a className="ghost-button" href={item.drive_view_link} target="_blank" rel="noopener noreferrer" style={{ marginTop: 12 }}>
+        Abrir en Drive
+      </a>
+    </Modal>
+  );
+}
+
+function MediaThumb({ item }: { item: ProjectMedia }) {
+  if (item.type === 'image' && item.drive_thumbnail_link) {
+    return <img src={`${item.drive_thumbnail_link}=w400`} alt={item.caption ?? ''} />;
+  }
+  return <div className="media-tile-fallback">{item.type === 'video' ? 'Video' : 'Foto'}</div>;
+}
+
+function ProjectMediaModal({
+  projectId,
+  projectName,
+  onClose,
+}: {
+  projectId: number;
+  projectName: string;
+  onClose: () => void;
+}) {
+  const { user } = useAuth();
+  const isAdmin = user?.roles.includes('Administrador') ?? false;
+  const queryClient = useQueryClient();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [lightboxItem, setLightboxItem] = useState<ProjectMedia | null>(null);
+  const queryKey = ['project-media', projectId];
+
+  const { data = [], isLoading } = useQuery({
+    queryKey,
+    queryFn: async () => (await api.get<ProjectMedia[]>(`/projects/${projectId}/media`)).data,
+  });
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey });
+
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      return api.post(`/projects/${projectId}/media`, formData);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/project-media/${id}`),
+    onSuccess: invalidate,
+    onError: (error) => {
+      const message = axios.isAxiosError(error) ? error.response?.data?.message : null;
+      setDeleteError(message ?? 'No se pudo eliminar el archivo. Intenta de nuevo.');
+    },
+  });
+
+  const handleDelete = (item: ProjectMedia) => {
+    setDeleteError(null);
+    if (window.confirm('¿Eliminar esta foto/video? Tambien se borra de tu Google Drive.')) {
+      deleteMutation.mutate(item.id);
+    }
+  };
+
+  const handleFiles = async (files: FileList) => {
+    const list = Array.from(files);
+    setUploadError(null);
+    setUploadProgress({ done: 0, total: list.length });
+    try {
+      for (const [index, file] of list.entries()) {
+        await uploadMutation.mutateAsync(file);
+        setUploadProgress({ done: index + 1, total: list.length });
+      }
+    } catch (error) {
+      const message = axios.isAxiosError(error) ? error.response?.data?.message : null;
+      setUploadError(message ?? 'No se pudo subir el archivo. Intenta de nuevo.');
+    } finally {
+      setUploadProgress(null);
+      invalidate();
+    }
+  };
+
+  return (
+    <Modal title={`Fotos y videos — ${projectName}`} onClose={onClose}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*,video/*"
+        multiple
+        hidden
+        onChange={(event) => {
+          if (event.target.files?.length) handleFiles(event.target.files);
+          event.target.value = '';
+        }}
+      />
+      <button type="button" className="ghost-button" onClick={() => inputRef.current?.click()} disabled={!!uploadProgress}>
+        <Images size={14} /> {uploadProgress ? `Subiendo ${uploadProgress.done}/${uploadProgress.total}...` : 'Subir fotos o videos'}
+      </button>
+      {uploadError && <p className="login-error">{uploadError}</p>}
+      {deleteError && <p className="login-error">{deleteError}</p>}
+
+      {isLoading && <Loading />}
+      {!isLoading && data.length === 0 && !uploadProgress && (
+        <p style={{ marginTop: 14 }}>Todavia no hay contenido para este proyecto.</p>
+      )}
+
+      <div className="media-grid" style={{ marginTop: 14 }}>
+        {data.map((item) => (
+          <div className="media-tile" key={item.id}>
+            <button type="button" className="media-tile-open" onClick={() => setLightboxItem(item)}>
+              <MediaThumb item={item} />
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                className="ghost-button media-tile-delete"
+                onClick={() => handleDelete(item)}
+                disabled={deleteMutation.isPending}
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      {lightboxItem && <MediaLightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />}
+    </Modal>
   );
 }
 

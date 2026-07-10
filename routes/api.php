@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\GoogleDriveController;
+use App\Http\Controllers\Api\V1\ProjectMediaController;
 use App\Http\Controllers\Api\V1\QuoteRequestController;
 use App\Http\Controllers\Api\V1\SegmentosController;
 use App\Http\Controllers\Api\V1\SiteController;
@@ -12,6 +14,10 @@ Route::prefix('v1')->group(function () {
     Route::post('/register', [QuoteRequestController::class, 'register'])->middleware('throttle:6,1');
     Route::get('/client-portal/{token}', [SegmentosController::class, 'clientPortal']);
     Route::get('/site', [SiteController::class, 'show']);
+    // Google redirige el navegador aqui tras el consentimiento; esa navegacion no trae
+    // el Referer de nuestro dominio, asi que Sanctum no la reconoce como peticion con sesion.
+    // Por eso queda publica: el "code" de un solo uso es la unica credencial que importa aqui.
+    Route::get('/google/callback', [GoogleDriveController::class, 'callback']);
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/me', [AuthController::class, 'me']);
@@ -24,6 +30,10 @@ Route::prefix('v1')->group(function () {
             Route::get('/projects', [SegmentosController::class, 'projects']);
             Route::post('/projects', [SegmentosController::class, 'storeProject']);
             Route::put('/projects/{project}', [SegmentosController::class, 'updateProject']);
+            Route::patch('/projects/{project}/notes', [SegmentosController::class, 'updateProjectNotes']);
+            Route::post('/projects/{project}/tasks', [SegmentosController::class, 'storeTask']);
+            Route::patch('/tasks/{projectTask}/status', [SegmentosController::class, 'updateTaskStatus']);
+            Route::delete('/tasks/{projectTask}', [SegmentosController::class, 'destroyTask']);
             Route::delete('/projects/{project}', [SegmentosController::class, 'destroyProject']);
             Route::get('/quotations', [SegmentosController::class, 'quotations']);
             Route::post('/quotations', [SegmentosController::class, 'storeQuotation']);
@@ -57,6 +67,14 @@ Route::prefix('v1')->group(function () {
             Route::post('/site-gallery', [SiteController::class, 'galleryStore']);
             Route::put('/site-gallery/{siteGalleryItem}', [SiteController::class, 'galleryUpdate']);
             Route::delete('/site-gallery/{siteGalleryItem}', [SiteController::class, 'galleryDestroy']);
+
+            Route::get('/google/connect', [GoogleDriveController::class, 'connect']);
+            Route::get('/google/status', [GoogleDriveController::class, 'status']);
+            Route::delete('/project-media/{projectMedia}', [ProjectMediaController::class, 'destroy']);
+        });
+
+        Route::middleware('role:Administrador|Community Manager')->group(function () {
+            Route::get('/content-library', [ProjectMediaController::class, 'library']);
         });
 
         Route::middleware('role:Trabajador')->group(function () {
@@ -71,6 +89,8 @@ Route::prefix('v1')->group(function () {
 
         Route::middleware('permission:upload project images')->group(function () {
             Route::post('/projects/{project}/image', [SegmentosController::class, 'uploadProjectImage']);
+            Route::get('/projects/{project}/media', [ProjectMediaController::class, 'index']);
+            Route::post('/projects/{project}/media', [ProjectMediaController::class, 'store']);
         });
 
         Route::middleware('permission:update assigned tasks')->group(function () {
